@@ -135,6 +135,7 @@ summary_df = summary_df[cols]
 
 # --- DISPLAY ---
 st.markdown(f"### Total Products: {summary_df.shape[0]}")
+st.dataframe(summary_df)
 
 # --- DOWNLOAD ---
 buf1 = io.BytesIO()
