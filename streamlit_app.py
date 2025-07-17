@@ -139,7 +139,7 @@ st.markdown(f"### Total Products: {summary_df.shape[0]}")
 # --- DOWNLOAD ---
 buf1 = io.BytesIO()
 with pd.ExcelWriter(buf1, engine="openpyxl") as w:
-    df_res.to_excel(w, index=False)
+    summary_df.to_excel(w, index=False)
 buf1.seek(0)
 st.download_button(
     "📥 Download Excel (Stock)",
