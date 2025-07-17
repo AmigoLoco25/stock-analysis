@@ -134,8 +134,7 @@ cols.insert(cols.index("Units (Last 6 Months)"), cols.pop(cols.index("Stock Real
 summary_df = summary_df[cols]
 
 # --- DISPLAY ---
-st.markdown(f"### 🧮 Total SKUs: {summary_df.shape[0]}")
-st.dataframe(summary_df, use_container_width=True)
+st.markdown(f"### Total Products: {summary_df.shape[0]}")
 
 # --- DOWNLOAD ---
 buf1 = io.BytesIO()
