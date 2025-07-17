@@ -9,6 +9,12 @@ import pytz
 import re
 import io
 
+
+password = st.text_input("🔐Ingrese la contraseña", type="password")
+if password != st.secrets["app_password"]:
+    st.stop()
+
+
 # --- CONFIG ---
 API_KEY = st.secrets["api_key"]
 HEADERS = {"accept": "application/json", "key": API_KEY}
