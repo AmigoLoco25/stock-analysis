@@ -87,6 +87,14 @@ sku_units_df = expand_order_rows(order_df)
 sku_units_df = sku_units_df.dropna(subset=["Date", "SKU", "Units"])
 sku_units_df = sku_units_df.apply(fix_sku_and_name, axis=1)
 
+sku_units_df = (
+    sku_units_df
+    .groupby(["SKU", "Product Name"], as_index=False)
+    .agg({
+        "Units": "sum"
+  })
+)
+
 # --- FILTER LAST 6 MONTHS ---
 today = datetime.now(MADRID_TZ).date()
 sku_units_df = sku_units_df[sku_units_df["Date"] >= today - timedelta(days=180)]
@@ -100,6 +108,8 @@ month_weight_map = dict(zip(month_bins, weights))
 grouped = sku_units_df.groupby(["SKU", "Product Name", "Month"]).agg({"Units": "sum"}).reset_index()
 grouped["Weight"] = grouped["Month"].map(month_weight_map)
 grouped["Weighted Units"] = grouped["Units"] * grouped["Weight"]
+
+
 
 # --- SUMMARY ---
 summary_df = (
