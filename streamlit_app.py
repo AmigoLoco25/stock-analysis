@@ -129,6 +129,8 @@ summary_df["Stock Real"] = summary_df["SKU"].map(stock_map).fillna(0).astype(int
 
 # --- REORDER COLUMNS ---
 summary_df = summary_df.rename(columns={"Units": "Units (Last 6 Months)"})
+summary_df = summary_df.sort_values(by="Units (Last 6 Months)", ascending=False)
+
 cols = summary_df.columns.tolist()
 cols.insert(cols.index("Units (Last 6 Months)"), cols.pop(cols.index("Stock Real")))
 summary_df = summary_df[cols]
