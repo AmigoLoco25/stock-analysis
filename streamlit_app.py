@@ -135,14 +135,26 @@ cols = summary_df.columns.tolist()
 cols.insert(cols.index("Units (Last 6 Months)") +1 , cols.pop(cols.index("Stock Real")))
 summary_df = summary_df[cols]
 
+# --- SINGLE FILTER FIELD ---
+search_input = st.text_input("🔍 Buscar por SKU o Nombre del Producto")
+
+filtered_df = summary_df.copy()
+
+if search_input:
+    search_lower = search_input.lower()
+    filtered_df = filtered_df[
+        filtered_df["SKU"].str.lower().str.contains(search_lower, na=False) |
+        filtered_df["Product Name"].str.lower().str.contains(search_lower, na=False)
+    ]
+
 # --- DISPLAY ---
 st.markdown(f"### Total Products: {summary_df.shape[0]}")
-st.dataframe(summary_df)
+st.dataframe(filtered_df, use_container_width=True)
 
 # --- DOWNLOAD ---
 buf1 = io.BytesIO()
 with pd.ExcelWriter(buf1, engine="openpyxl") as w:
-    summary_df.to_excel(w, index=False)
+    filtered_df.to_excel(w, index=False)
 buf1.seek(0)
 st.download_button(
     "📥 Download Excel (Stock)",
