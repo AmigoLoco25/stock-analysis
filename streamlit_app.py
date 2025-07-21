@@ -205,6 +205,8 @@ cols.insert(idx+2, cols.pop(cols.index("Stock Reservado")))
 cols.insert(idx+3, cols.pop(cols.index("Stock Disponible")))
 summary_df = summary_df[cols]
 
+summary_df = summary_df.drop_duplicates(subset=["SKU", "Product Name"])
+
 # --- FILTRO DE BÚSQUEDA ---
 search_input = st.text_input("🔍 Buscar por SKU o Nombre del Producto")
 filtered_df = summary_df.copy()
