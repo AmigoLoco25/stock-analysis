@@ -193,6 +193,28 @@ summary_df["Stock Reservado"] = summary_df["Stock Reservado"].fillna(0).astype(i
 # Stock disponible
 summary_df["Stock Disponible"] = (summary_df["Stock Real"] - summary_df["Stock Reservado"]).astype(int)
 
+# --- CONSOLIDAR SKUs DUPLICADOS ---
+def consolidate_skus(df):
+    agg = {
+        "Product Name": "first",
+        "Units (Last 6 Months)": lambda x: x.iloc[0] if x.nunique() == 1 else x.sum(),
+        "Media Exponencial (Mes)": "sum",
+        "Active Months": "max",
+        "Stock Real": "max",
+        "Stock Reservado": "max",
+        "Stock Disponible": "max",
+    }
+    df = df.groupby("SKU", as_index=False).agg(agg)
+    # Recompute media lineal y media final tras consolidar
+    
+    df["Media Lineal (Mes)"] = (df["Units (Last 6 Months)"] / 6).round(2)
+    df["Media"] = ((df["Media Lineal (Mes)"] + df["Media Exponencial (Mes)"]) / 2).round(2)
+    return df
+
+summary_df = consolidate_skus(summary_df)
+
+
+
 # --- REORDENAR COLUMNAS ---
 summary_df = summary_df.sort_values(by="Units (Last 6 Months)", ascending=False)
 cols = summary_df.columns.tolist()
@@ -204,8 +226,7 @@ cols.insert(idx+1, cols.pop(cols.index("Stock Real")))
 cols.insert(idx+2, cols.pop(cols.index("Stock Reservado")))
 cols.insert(idx+3, cols.pop(cols.index("Stock Disponible")))
 summary_df = summary_df[cols]
-
-summary_df = summary_df.drop_duplicates(subset=["SKU", "Product Name"])
+summary_df = summary_df[summary_df["SKU"] != "0"]
 
 # --- FILTRO DE BÚSQUEDA ---
 search_input = st.text_input("🔍 Buscar por SKU o Nombre del Producto")
