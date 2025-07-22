@@ -89,7 +89,7 @@ def fix_sku_and_name(row):
 # --- LOAD DATA ---
 product_df = fetch_products()
 pedido_df = fetch_docs("salesorder", start=six_months_ago_ts, end=today_ts)
-albaran_df = fetch_docs("waybill")
+albaran_df = fetch_docs("invoice")
 
 pedido_products = extract_products(pedido_df).apply(fix_sku_and_name, axis=1)
 albaran_products = extract_products(albaran_df).apply(fix_sku_and_name, axis=1)
