@@ -154,8 +154,9 @@ final_df = pd.merge(summary_df, merged_df, on=["SKU", "Product Name"], how="inne
 
 # --- CLEANUP & DISPLAY ---
 final_df = final_df[[
-    "SKU", "Product Name", "Units (Last 6 Months)", "Media Lineal (Mes)", "Media Exponencial (Mes)", "Media",
-    "Active Months", "Stock Reservado", "Stock Real", "Stock Disponible"
+    "SKU", "Product Name", "Units Sold (Last 6 Months)", "Stock Reservado", "Stock Real", "Stock Disponible",
+    "Media Lineal (Mes)", "Media Exponencial (Mes)", "Media",
+    "Active Months"
 ]].sort_values(by="Units (Last 6 Months)", ascending=False)
 
 # --- SEARCH FIELD ---
