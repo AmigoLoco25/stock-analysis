@@ -28,6 +28,10 @@ six_months_ago = now_madrid - relativedelta(months=6)
 today_ts = int(now_madrid.timestamp())
 six_months_ago_ts = int(six_months_ago.timestamp())
 
+
+if st.button("🔄 Refresh Data"):
+    st.cache_data.clear()
+
 # --- FETCH FUNCTIONS ---
 @st.cache_data(ttl=3600)
 def fetch_docs(doc_type, start=None, end=None):
@@ -153,10 +157,7 @@ merged_df["Stock Disponible"] = merged_df["Stock Real"] - merged_df["Stock Reser
 final_df = pd.merge(summary_df, merged_df, on=["SKU", "Product Name"], how="inner")
 
 # --- CLEANUP & DISPLAY ---
-final_df = final_df[[
-    "SKU", "Product Name", "Units Sold (Last 6 Months)", "Stock Reservado", "Stock Real", "Stock Disponible",
-    "Media Lineal (Mes)", "Media Exponencial (Mes)", "Media",
-    "Active Months"
+final_df = final_df[["SKU", "Product Name", "Units Sold (Last 6 Months)", "Stock Reservado", "Stock Real", "Stock Disponible", "Media Lineal (Mes)", "Media Exponencial (Mes)", "Media", "Active Months"
 ]].sort_values(by="Units (Last 6 Months)", ascending=False)
 
 # --- SEARCH FIELD ---
