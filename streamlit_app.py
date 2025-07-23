@@ -23,6 +23,9 @@ MADRID_TZ = pytz.timezone("Europe/Madrid")
 st.set_page_config(page_title="📦 Análisis de Stock", layout="wide")
 st.title("📦 Análisis de Stock (Últimos 6 Meses)")
 
+if st.button("🔄 Refresh Data"):
+    st.cache_data.clear()
+
 # --- TIMESTAMP RANGE ---
 now = datetime.now(MADRID_TZ)
 six_months_ago = now - relativedelta(months=6)
@@ -50,7 +53,7 @@ def fix_sku_and_name(row):
     return row
 
 # --- FETCH STOCK PRODUCTS ---
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=600000)
 def fetch_products():
     all_prods = []
     page = 1
@@ -65,7 +68,7 @@ def fetch_products():
     return pd.DataFrame(all_prods)
 
 # --- FETCH SALES ORDERS ---
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=600000)
 def fetch_salesorders():
     url = f"{BASE_URL}/documents/salesorder?starttmp={start_ts}&endtmp={end_ts}"
     resp = requests.get(url, headers=HEADERS)
