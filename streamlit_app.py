@@ -233,7 +233,7 @@ with pd.ExcelWriter(buf, engine="openpyxl") as writer:
     filtered_df.to_excel(writer, index=False)
 buf.seek(0)
 st.download_button(
-    "📅 Descargar Excel",
+    "📥 Descargar Excel",
     buf,
     file_name="analisis_stock_6meses.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
