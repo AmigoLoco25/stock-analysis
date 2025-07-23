@@ -102,6 +102,8 @@ for _, row in sales_df.iterrows():
 df = pd.DataFrame(shipped_rows)
 df = df[df["SKU"].astype(str) != "0"]
 df = df.apply(fix_sku_and_name, axis=1)
+df = df[df["Product Name"].str.lower() != "shipping"]
+
 
 # --- Aggregate by SKU ---
 df = (
