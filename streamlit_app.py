@@ -25,6 +25,13 @@ st.title("📦 Análisis de Stock (Últimos 6 Meses)")
 
 if st.button("🔄 Refresh Data"):
     st.cache_data.clear()
+    
+filter_by_so = st.selectbox(
+    "📄 Filtrar solo pedidos con docNumber de 'SO'? (excluye pedidos de Wix)",
+    options=["Sí", "No"],
+    index=0
+)
+
 
 # --- TIMESTAMP RANGE ---
 now = datetime.now(MADRID_TZ)
@@ -72,8 +79,7 @@ def fetch_products():
 def fetch_salesorders():
     url = f"{BASE_URL}/documents/salesorder?starttmp={start_ts}&endtmp={end_ts}"
     resp = requests.get(url, headers=HEADERS)
-    df = pd.DataFrame(resp.json())
-    return df[df["docNumber"].str.startswith("SO", na=False)]
+    return pd.DataFrame(resp.json())
 
 # --- FETCH SHIPPED ITEMS ---
 @st.cache_data(ttl=600000)  # 🟡 NEW — cache shipped item results by doc_id/doc_number
@@ -99,7 +105,11 @@ def get_shipped_items(doc_id, doc_number):
 @st.cache_data(ttl=600000)
 def process_data():
     product_df = fetch_products()
-    sales_df = fetch_salesorders()
+    raw_sales_df = fetch_salesorders_raw()
+    if filter_by_so == "Sí":
+        sales_df = raw_sales_df[raw_sales_df["docNumber"].str.startswith("SO", na=False)]
+    else:
+        sales_df = raw_sales_df
 
     shipped_rows = []
     for _, row in sales_df.iterrows():
