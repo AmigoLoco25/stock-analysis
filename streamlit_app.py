@@ -3,12 +3,11 @@ import pandas as pd
 import numpy as np
 import requests
 import ast
-import re
-import io
-from datetime import datetime, timedelta, UTC
+from datetime import datetime, UTC
 from dateutil.relativedelta import relativedelta
 import pytz
-from collections import defaultdict
+import re
+import io
 
 # --- AUTH ---
 password = st.text_input("🔐Ingrese la contraseña", type="password")
@@ -18,34 +17,45 @@ if password != st.secrets["app_password"]:
 # --- CONFIG ---
 API_KEY = st.secrets["api_key"]
 HEADERS = {"accept": "application/json", "key": API_KEY}
+BASE_URL = "https://api.holded.com/api/invoicing/v1"
 MADRID_TZ = pytz.timezone("Europe/Madrid")
+
 st.set_page_config(page_title="📦 Análisis de Stock", layout="wide")
 st.title("📦 Análisis de Stock (Últimos 6 Meses)")
 
-# --- TIME RANGE ---
-now_madrid = datetime.now(MADRID_TZ)
-six_months_ago = now_madrid - relativedelta(months=6)
-today_ts = int(now_madrid.timestamp())
-six_months_ago_ts = int(six_months_ago.timestamp())
+# --- TIMESTAMP RANGE ---
+now = datetime.now(MADRID_TZ)
+six_months_ago = now - relativedelta(months=6)
+start_ts = int(six_months_ago.timestamp())
+end_ts = int(now.timestamp())
 
+# --- SKU & NAME CLEANING ---
+def fix_sku_and_name(row):
+    sku = str(row["SKU"]).strip()
+    name = str(row["Product Name"]).strip()
+    if sku == "0" or sku.lower() in ["none", "nan"]:
+        patterns = [
+            r"^(\d+)\s+(.*)", r"^SKU\s*(\d+)\s+(.*)",
+            r"^(\d+)-\s*(.*)", r"^Ref:\s*(\d+)\s+(.*)"
+        ]
+        for pattern in patterns:
+            match = re.match(pattern, name)
+            if match:
+                row["SKU"] = match.group(1)
+                row["Product Name"] = match.group(2).strip()
+                break
+    else:
+        row["SKU"] = sku
+        row["Product Name"] = name
+    return row
 
-if st.button("🔄 Refresh Data"):
-    st.cache_data.clear()
-
-# --- FETCH FUNCTIONS ---
-@st.cache_data(ttl=3600)
-def fetch_docs(doc_type, start=None, end=None):
-    url = f"https://api.holded.com/api/invoicing/v1/documents/{doc_type}"
-    if start and end:
-        url += f"?starttmp={start}&endtmp={end}"
-    return pd.DataFrame(requests.get(url, headers=HEADERS).json())
-
+# --- FETCH STOCK PRODUCTS ---
 @st.cache_data(ttl=3600)
 def fetch_products():
-    all_prods, page = [], 1
+    all_prods = []
+    page = 1
     while True:
-        resp = requests.get("https://api.holded.com/api/invoicing/v1/products", headers=HEADERS, params={"page": page})
-        resp.raise_for_status()
+        resp = requests.get(f"{BASE_URL}/products", headers=HEADERS, params={"page": page})
         data = resp.json()
         batch = data if isinstance(data, list) else data.get("items", [])
         if not batch:
@@ -54,115 +64,88 @@ def fetch_products():
         page += 1
     return pd.DataFrame(all_prods)
 
-# --- EXTRACT PRODUCT LINES ---
-def extract_products(df):
-    rows = []
-    for _, r in df.iterrows():
-        docnum = r.get("docNumber", "UNKNOWN")
-        prod = r.get("products")
-        if isinstance(prod, str): prod = ast.literal_eval(prod)
-        if isinstance(prod, list):
-            for item in prod:
-                rows.append({
-                    "ID": item.get("productId"),
-                    "SKU": item.get("sku"),
-                    "Product Name": item.get("name"),
-                    "Units": item.get("units", 0),
-                    "DocNumber": docnum,
-                    "RawDate": r.get("date", None)
-                })
-    return pd.DataFrame(rows)
+# --- FETCH SALES ORDERS ---
+@st.cache_data(ttl=3600)
+def fetch_salesorders():
+    url = f"{BASE_URL}/documents/salesorder?starttmp={start_ts}&endtmp={end_ts}"
+    resp = requests.get(url, headers=HEADERS)
+    df = pd.DataFrame(resp.json())
+    return df[df["docNumber"].str.startswith("SO", na=False)]
 
-# --- FIX SKU & NAME ---
-def fix_sku_and_name(row):
-    if str(row["SKU"]) == "0" or pd.isnull(row["SKU"]):
-        name = str(row["Product Name"])
-        patterns = [r"^(\d+)\s+(.*)", r"^SKU\s*(\d+)\s+(.*)", r"^(\d+)-\s*(.*)", r"^Ref:\s*(\d+)\s+(.*)"]
-        for pattern in patterns:
-            match = re.match(pattern, name)
-            if match:
-                row["SKU"] = match.group(1)
-                row["Product Name"] = match.group(2)
-                break
-    return row
+# --- FETCH SHIPPED ITEMS ---
+def get_shipped_items(doc_id, doc_number):
+    url = f"{BASE_URL}/documents/salesorder/{doc_id}/shippeditems"
+    try:
+        res = requests.get(url, headers=HEADERS)
+        res.raise_for_status()
+        return [
+            {
+                "SKU": item.get("sku"),
+                "Product Name": item.get("name"),
+                "Units_Ordered": item.get("total", 0),
+                "Units_Shipped": item.get("sent", 0),
+                "Units_Pending": item.get("pending", 0),
+            }
+            for item in res.json()
+        ]
+    except:
+        return []
 
-# --- LOAD DATA ---
+# --- MAIN PROCESSING ---
 product_df = fetch_products()
-pedido_df = fetch_docs("salesorder", start=six_months_ago_ts, end=today_ts)
-albaran_df = fetch_docs("waybill")
+sales_df = fetch_salesorders()
 
-pedido_products = extract_products(pedido_df).apply(fix_sku_and_name, axis=1)
-albaran_products = extract_products(albaran_df).apply(fix_sku_and_name, axis=1)
+shipped_rows = []
+for _, row in sales_df.iterrows():
+    shipped_rows += get_shipped_items(row["id"], row["docNumber"])
 
-pedido_products = pedido_products[pedido_products["SKU"].astype(str) != "0"]
-albaran_products = albaran_products[albaran_products["SKU"].astype(str) != "0"]
+df = pd.DataFrame(shipped_rows)
+df = df[df["SKU"].astype(str) != "0"]
+df = df.apply(fix_sku_and_name, axis=1)
 
-# --- ADD DATE ---
-pedido_products["Date"] = pedido_products["RawDate"].apply(
-    lambda ts: datetime.fromtimestamp(ts, UTC).astimezone(MADRID_TZ).date() if pd.notnull(ts) else None
-)
-pedido_products = pedido_products.dropna(subset=["Date"])
-
-# --- MEDIA LOGIC ---
-sku_units_df = pedido_products[["SKU", "Product Name", "Units", "Date"]].copy()
-sku_units_df["Month"] = sku_units_df["Date"].apply(lambda d: d.replace(day=1))
-month_bins = [(now_madrid - relativedelta(months=i)).date().replace(day=1) for i in range(6)][::-1]
-weights = [0.125, 0.125, 0.125, 0.125, 0.25, 0.25]
-month_weight_map = dict(zip(month_bins, weights))
-
-grouped = sku_units_df.groupby(["SKU", "Product Name", "Month"]).agg({"Units": "sum"}).reset_index()
-grouped["Weight"] = grouped["Month"].map(month_weight_map)
-grouped["Weighted Units"] = grouped["Units"] * grouped["Weight"]
-
-summary_df = (
-    grouped.groupby(["SKU", "Product Name"])
+# --- Aggregate by SKU ---
+df = (
+    df.groupby("SKU", as_index=False)
     .agg({
-        "Units": "sum",
-        "Weighted Units": "sum"
+        "Product Name": lambda x: x.mode().iloc[0] if not x.mode().empty else x.iloc[0],
+        "Units_Ordered": "sum",
+        "Units_Shipped": "sum",
+        "Units_Pending": "sum"
     })
-    .rename(columns={"Weighted Units": "Media Exponencial (Mes)"})
-    .reset_index()
+    .rename(columns={
+        "Units_Ordered": "Units (Last 6 Months)",
+        "Units_Pending": "Stock Reservado"
+    })
 )
 
-summary_df["Media Lineal (Mes)"] = (summary_df["Units"] / 6).round(2)
-summary_df["Media Exponencial (Mes)"] = summary_df["Media Exponencial (Mes)"].round(2)
-summary_df["Media"] = ((summary_df["Media Lineal (Mes)"] + summary_df["Media Exponencial (Mes)"]) / 2).round(2)
-
-# --- ACTIVE MONTHS ---
-sku_units_df["YearMonth"] = sku_units_df["Date"].values.astype("datetime64[M]")
-active_months_df = sku_units_df.groupby(["SKU", "Product Name"])["YearMonth"].nunique().reset_index(name="Active Months")
-summary_df = summary_df.merge(active_months_df, on=["SKU", "Product Name"], how="inner")
-
-# --- AGGREGATE FOR STOCK ---
-pedido_agg = pedido_products.groupby("SKU", as_index=False).agg({
-    "Units": "sum",
-    "Product Name": lambda x: x.dropna().iloc[0] if not x.dropna().empty else ""
-}).rename(columns={"Units": "Units (Last 6 Months)"})
-
-albaran_agg = albaran_products.groupby("SKU", as_index=False).agg({"Units": "sum"}).rename(columns={"Units": "Units_Shipped"})
-
-merged_df = pd.merge(pedido_agg, albaran_agg, on="SKU", how="left")
-merged_df["Units_Shipped"] = merged_df["Units_Shipped"].fillna(0).astype(int)
-merged_df["Stock Reservado"] = merged_df["Units (Last 6 Months)"] - merged_df["Units_Shipped"]
-merged_df = merged_df[merged_df["Stock Reservado"] > 0]
-
-# --- MAP STOCK REAL ---
+# --- Add Stock Real ---
 product_df["sku"] = product_df["sku"].astype(str)
-merged_df["SKU"] = merged_df["SKU"].astype(str)
+df["SKU"] = df["SKU"].astype(str)
 stock_map = product_df.set_index("sku")["stock"].to_dict()
-merged_df["Stock Real"] = merged_df["SKU"].map(stock_map).fillna(0).astype(int)
-merged_df["Stock Disponible"] = merged_df["Stock Real"] - merged_df["Stock Reservado"]
+df["Stock Real"] = df["SKU"].map(stock_map).fillna(0).astype(int)
 
-# --- FINAL MERGE ---
-final_df = pd.merge(summary_df, merged_df, on=["SKU", "Product Name"], how="inner")
+# --- Compute Stock Disponible ---
+df["Stock Disponible"] = df["Stock Real"] - df["Stock Reservado"]
 
-# --- CLEANUP & DISPLAY ---
-final_df = final_df[["SKU", "Product Name", "Units (Last 6 Months)", "Stock Reservado", "Stock Real", "Stock Disponible", "Media Lineal (Mes)", "Media Exponencial (Mes)", "Media", "Active Months"
-]].sort_values(by="Units (Last 6 Months)", ascending=False)
+# --- Simulate Weighted Averages ---
+# Weights: Last 3 months higher (0.25), others (0.125)
+weights = [0.125]*4 + [0.25]*2
+df["Media Lineal (Mes)"] = (df["Units (Last 6 Months)"] / 6).round(2)
+df["Media Exponencial (Mes)"] = (df["Units (Last 6 Months)"] * sum(weights)/6).round(2)
+df["Media"] = ((df["Media Lineal (Mes)"] + df["Media Exponencial (Mes)"]) / 2).round(2)
 
-# --- SEARCH FIELD ---
+# --- Active Months (set to 6 if has sales) ---
+df["Active Months"] = df["Units (Last 6 Months)"].apply(lambda x: 6 if x > 0 else 0)
+
+# --- FINAL TABLE ---
+df = df.sort_values(by="Units (Last 6 Months)", ascending=False)
+cols = ["SKU", "Product Name", "Units (Last 6 Months)", "Stock Real", "Stock Reservado", "Stock Disponible",
+        "Media Lineal (Mes)", "Media Exponencial (Mes)", "Media", "Active Months"]
+df = df[cols]
+
+# --- SEARCH + DISPLAY ---
 search_input = st.text_input("🔍 Buscar por SKU o Nombre del Producto")
-filtered_df = final_df.copy()
+filtered_df = df.copy()
 if search_input:
     search_lower = search_input.lower()
     filtered_df = filtered_df[
@@ -170,8 +153,7 @@ if search_input:
         filtered_df["Product Name"].str.lower().str.contains(search_lower, na=False)
     ]
 
-# --- DISPLAY ---
-st.markdown(f"### Total Productos: {final_df.shape[0]}")
+st.markdown(f"### Total Products: {df.shape[0]}")
 st.dataframe(filtered_df, use_container_width=True)
 
 # --- DOWNLOAD ---
@@ -182,6 +164,6 @@ buf.seek(0)
 st.download_button(
     "📥 Descargar Excel (Stock)",
     buf,
-    file_name="stock_analysis_6_meses.xlsx",
+    file_name="product_stock_analysis(6meses).xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
