@@ -25,13 +25,14 @@ st.title("📦 Análisis de Stock (Últimos 6 Meses)")
 
 if st.button("🔄 Refresh Data"):
     st.cache_data.clear()
-    
+
+# --- USER OPTION: Filter by SO ---
 filter_by_so = st.selectbox(
-    "📄 Filtrar solo pedidos con docNumber de 'SO'? (excluye pedidos de Wix)",
+    "📄 Filtrar solo pedidos con docNumber que empieza por 'SO'?",
     options=["Sí", "No"],
     index=0
 )
-
+filter_so_flag = filter_by_so == "Sí"
 
 # --- TIMESTAMP RANGE ---
 now = datetime.now(MADRID_TZ)
@@ -76,13 +77,16 @@ def fetch_products():
 
 # --- FETCH SALES ORDERS ---
 @st.cache_data(ttl=600000)
-def fetch_salesorders():
+def fetch_salesorders_filtered(filter_so: bool):
     url = f"{BASE_URL}/documents/salesorder?starttmp={start_ts}&endtmp={end_ts}"
     resp = requests.get(url, headers=HEADERS)
-    return pd.DataFrame(resp.json())
+    df = pd.DataFrame(resp.json())
+    if filter_so:
+        df = df[df["docNumber"].str.startswith("SO", na=False)]
+    return df
 
 # --- FETCH SHIPPED ITEMS ---
-@st.cache_data(ttl=600000)  # 🟡 NEW — cache shipped item results by doc_id/doc_number
+@st.cache_data(ttl=600000)
 def get_shipped_items(doc_id, doc_number):
     url = f"{BASE_URL}/documents/salesorder/{doc_id}/shippeditems"
     try:
@@ -101,15 +105,11 @@ def get_shipped_items(doc_id, doc_number):
     except:
         return []
 
-# --- WRAPPED FULL PIPELINE IN CACHE --- 🟡 NEW
+# --- WRAPPED FULL PIPELINE ---
 @st.cache_data(ttl=600000)
-def process_data():
+def process_data(filter_so):
     product_df = fetch_products()
-    raw_sales_df = fetch_salesorders()
-    if filter_by_so == "Sí":
-        sales_df = raw_sales_df[raw_sales_df["docNumber"].str.startswith("SO", na=False)]
-    else:
-        sales_df = raw_sales_df
+    sales_df = fetch_salesorders_filtered(filter_so)
 
     shipped_rows = []
     for _, row in sales_df.iterrows():
@@ -134,7 +134,6 @@ def process_data():
         })
     )
 
-    # --- Add Stock Real ---
     product_df["sku"] = product_df["sku"].astype(str)
     df["SKU"] = df["SKU"].astype(str)
     stock_map = product_df.set_index("sku")["stock"].to_dict()
@@ -143,15 +142,10 @@ def process_data():
 
     return df
 
-# --- CALL CACHED PIPELINE --- 🟡 NEW
-df = process_data()
-
-# --- Accurate Active Months --- 🟡 NEW
+# --- Active Months ---
 @st.cache_data(ttl=600000)
-def fetch_full_salesorders():
-    url = f"{BASE_URL}/documents/salesorder?starttmp={start_ts}&endtmp={end_ts}"
-    resp = requests.get(url, headers=HEADERS)
-    return pd.DataFrame(resp.json())
+def fetch_full_salesorders_filtered(filter_so: bool):
+    return fetch_salesorders_filtered(filter_so)
 
 def extract_sku_dates(order_df):
     rows = []
@@ -168,26 +162,10 @@ def extract_sku_dates(order_df):
             })
     return pd.DataFrame(rows)
 
-orders_raw = fetch_full_salesorders()
-sku_date_df = extract_sku_dates(orders_raw)
-sku_date_df["Month"] = sku_date_df["Date"].apply(lambda d: d.replace(day=1))
-six_months_ago_date = (now - relativedelta(months=6)).replace(day=1).date()
-sku_date_df = sku_date_df[sku_date_df["Month"] >= six_months_ago_date]  # 🟡 NEW
-
-active_months_df = sku_date_df.groupby("SKU")["Month"].nunique().reset_index(name="Active Months")
-df = df.drop(columns=["Active Months"], errors="ignore")
-df = df.merge(active_months_df, on="SKU", how="left")
-df["Active Months"] = df["Active Months"].fillna(0).clip(upper=6).astype(int)  # 🟡 NEW
-
-
-
-# --- Linear Average ---
-df["Media Lineal (Mes)"] = (df["Units (Last 6 Months)"] / 6).round(2)
-
-# --- Real Weighted Monthly Sales ---
+# --- Weighted Units ---
 @st.cache_data(ttl=600000)
-def get_weighted_units_by_sku():
-    full_orders = fetch_full_salesorders()
+def get_weighted_units_by_sku(filter_so):
+    full_orders = fetch_full_salesorders_filtered(filter_so)
     rows = []
     for _, row in full_orders.iterrows():
         try:
@@ -203,34 +181,40 @@ def get_weighted_units_by_sku():
             })
     df_monthly = pd.DataFrame(rows)
     df_monthly["Month"] = df_monthly["Date"].apply(lambda d: d.replace(day=1))
-    
-    # Last 6 months only
     month_bins = [(now - relativedelta(months=i)).replace(day=1).date() for i in range(6)][::-1]
     df_monthly = df_monthly[df_monthly["Month"].isin(month_bins)]
-    
-    # Apply weights
     weight_map = dict(zip(month_bins, [0.125, 0.125, 0.125, 0.125, 0.25, 0.25]))
     df_monthly["Weight"] = df_monthly["Month"].map(weight_map)
     df_monthly["Weighted"] = df_monthly["Units"] * df_monthly["Weight"]
-
     weighted_summary = df_monthly.groupby("SKU")["Weighted"].sum().reset_index(name="Media Exponencial (Mes)")
     return weighted_summary
 
-# Merge real weighted average
-weighted_df = get_weighted_units_by_sku()
+# --- Load Data ---
+df = process_data(filter_so_flag)
+orders_raw = fetch_full_salesorders_filtered(filter_so_flag)
+sku_date_df = extract_sku_dates(orders_raw)
+sku_date_df["Month"] = sku_date_df["Date"].apply(lambda d: d.replace(day=1))
+six_months_ago_date = (now - relativedelta(months=6)).replace(day=1).date()
+sku_date_df = sku_date_df[sku_date_df["Month"] >= six_months_ago_date]
+active_months_df = sku_date_df.groupby("SKU")["Month"].nunique().reset_index(name="Active Months")
+df = df.drop(columns=["Active Months"], errors="ignore")
+df = df.merge(active_months_df, on="SKU", how="left")
+df["Active Months"] = df["Active Months"].fillna(0).clip(upper=6).astype(int)
+
+# --- Averages ---
+df["Media Lineal (Mes)"] = (df["Units (Last 6 Months)"] / 6).round(2)
+weighted_df = get_weighted_units_by_sku(filter_so_flag)
 df = df.merge(weighted_df, on="SKU", how="left")
 df["Media Exponencial (Mes)"] = df["Media Exponencial (Mes)"].fillna(0).round(2)
-
 df["Media"] = ((df["Media Lineal (Mes)"] + df["Media Exponencial (Mes)"]) / 2).round(2)
 
-
-# --- FINAL TABLE ---
+# --- Final Table ---
 df = df.sort_values(by="Units (Last 6 Months)", ascending=False)
 cols = ["SKU", "Product Name", "Units (Last 6 Months)", "Stock Real", "Stock Reservado", "Stock Disponible",
         "Media Lineal (Mes)", "Media Exponencial (Mes)", "Media", "Active Months"]
 df = df[cols]
 
-# --- SEARCH + DISPLAY ---
+# --- Search + Display ---
 search_input = st.text_input("🔍 Buscar por SKU o Nombre del Producto")
 filtered_df = df.copy()
 if search_input:
@@ -243,13 +227,13 @@ if search_input:
 st.markdown(f"### Total Products: {df.shape[0]}")
 st.dataframe(filtered_df, use_container_width=True)
 
-# --- DOWNLOAD ---
+# --- Download ---
 buf = io.BytesIO()
 with pd.ExcelWriter(buf, engine="openpyxl") as writer:
     filtered_df.to_excel(writer, index=False)
 buf.seek(0)
 st.download_button(
-    "📥 Descargar Excel",
+    "📅 Descargar Excel",
     buf,
     file_name="analisis_stock_6meses.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
