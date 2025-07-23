@@ -105,7 +105,7 @@ def get_shipped_items(doc_id, doc_number):
 @st.cache_data(ttl=600000)
 def process_data():
     product_df = fetch_products()
-    raw_sales_df = fetch_salesorders_raw()
+    raw_sales_df = fetch_salesorders()
     if filter_by_so == "Sí":
         sales_df = raw_sales_df[raw_sales_df["docNumber"].str.startswith("SO", na=False)]
     else:
