@@ -136,6 +136,41 @@ def process_data():
 # --- CALL CACHED PIPELINE --- 🟡 NEW
 df = process_data()
 
+# --- Accurate Active Months --- 🟡 NEW
+@st.cache_data(ttl=600000)
+def fetch_full_salesorders():
+    url = f"{BASE_URL}/documents/salesorder?starttmp={start_ts}&endtmp={end_ts}"
+    resp = requests.get(url, headers=HEADERS)
+    return pd.DataFrame(resp.json())
+
+def extract_sku_dates(order_df):
+    rows = []
+    for _, row in order_df.iterrows():
+        try:
+            products = ast.literal_eval(row["products"]) if isinstance(row["products"], str) else row["products"]
+        except:
+            continue
+        readable_date = datetime.fromtimestamp(row["date"], UTC).astimezone(MADRID_TZ).date()
+        for item in products:
+            rows.append({
+                "SKU": str(item.get("sku", "")).strip(),
+                "Date": readable_date
+            })
+    return pd.DataFrame(rows)
+
+orders_raw = fetch_full_salesorders()
+sku_date_df = extract_sku_dates(orders_raw)
+sku_date_df["Month"] = sku_date_df["Date"].apply(lambda d: d.replace(day=1))
+six_months_ago_date = (now - relativedelta(months=6)).replace(day=1).date()
+sku_date_df = sku_date_df[sku_date_df["Month"] >= six_months_ago_date]  # 🟡 NEW
+
+active_months_df = sku_date_df.groupby("SKU")["Month"].nunique().reset_index(name="Active Months")
+df = df.drop(columns=["Active Months"], errors="ignore")
+df = df.merge(active_months_df, on="SKU", how="left")
+df["Active Months"] = df["Active Months"].fillna(0).clip(upper=6).astype(int)  # 🟡 NEW
+
+
+
 # --- Linear Average ---
 df["Media Lineal (Mes)"] = (df["Units (Last 6 Months)"] / 6).round(2)
 
@@ -178,38 +213,6 @@ df["Media Exponencial (Mes)"] = df["Media Exponencial (Mes)"].fillna(0).round(2)
 
 df["Media"] = ((df["Media Lineal (Mes)"] + df["Media Exponencial (Mes)"]) / 2).round(2)
 
-# --- Accurate Active Months --- 🟡 NEW
-@st.cache_data(ttl=600000)
-def fetch_full_salesorders():
-    url = f"{BASE_URL}/documents/salesorder?starttmp={start_ts}&endtmp={end_ts}"
-    resp = requests.get(url, headers=HEADERS)
-    return pd.DataFrame(resp.json())
-
-def extract_sku_dates(order_df):
-    rows = []
-    for _, row in order_df.iterrows():
-        try:
-            products = ast.literal_eval(row["products"]) if isinstance(row["products"], str) else row["products"]
-        except:
-            continue
-        readable_date = datetime.fromtimestamp(row["date"], UTC).astimezone(MADRID_TZ).date()
-        for item in products:
-            rows.append({
-                "SKU": str(item.get("sku", "")).strip(),
-                "Date": readable_date
-            })
-    return pd.DataFrame(rows)
-
-orders_raw = fetch_full_salesorders()
-sku_date_df = extract_sku_dates(orders_raw)
-sku_date_df["Month"] = sku_date_df["Date"].apply(lambda d: d.replace(day=1))
-six_months_ago_date = (now - relativedelta(months=6)).replace(day=1).date()
-sku_date_df = sku_date_df[sku_date_df["Month"] >= six_months_ago_date]  # 🟡 NEW
-
-active_months_df = sku_date_df.groupby("SKU")["Month"].nunique().reset_index(name="Active Months")
-df = df.drop(columns=["Active Months"], errors="ignore")
-df = df.merge(active_months_df, on="SKU", how="left")
-df["Active Months"] = df["Active Months"].fillna(0).clip(upper=6).astype(int)  # 🟡 NEW
 
 # --- FINAL TABLE ---
 df = df.sort_values(by="Units (Last 6 Months)", ascending=False)
