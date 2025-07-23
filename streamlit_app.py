@@ -136,10 +136,46 @@ def process_data():
 # --- CALL CACHED PIPELINE --- 🟡 NEW
 df = process_data()
 
-# --- Simulate Weighted Averages ---
-weights = [0.125]*4 + [0.25]*2
+# --- Linear Average ---
 df["Media Lineal (Mes)"] = (df["Units (Last 6 Months)"] / 6).round(2)
-df["Media Exponencial (Mes)"] = (df["Units (Last 6 Months)"] * sum(weights)/6).round(2)
+
+# --- Real Weighted Monthly Sales ---
+@st.cache_data(ttl=600000)
+def get_weighted_units_by_sku():
+    full_orders = fetch_full_salesorders()
+    rows = []
+    for _, row in full_orders.iterrows():
+        try:
+            products = ast.literal_eval(row["products"]) if isinstance(row["products"], str) else row["products"]
+        except:
+            continue
+        readable_date = datetime.fromtimestamp(row["date"], UTC).astimezone(MADRID_TZ).date()
+        for item in products:
+            rows.append({
+                "SKU": str(item.get("sku", "")).strip(),
+                "Date": readable_date,
+                "Units": item.get("units", 0)
+            })
+    df_monthly = pd.DataFrame(rows)
+    df_monthly["Month"] = df_monthly["Date"].apply(lambda d: d.replace(day=1))
+    
+    # Last 6 months only
+    month_bins = [(now - relativedelta(months=i)).replace(day=1).date() for i in range(6)][::-1]
+    df_monthly = df_monthly[df_monthly["Month"].isin(month_bins)]
+    
+    # Apply weights
+    weight_map = dict(zip(month_bins, [0.125, 0.125, 0.125, 0.125, 0.25, 0.25]))
+    df_monthly["Weight"] = df_monthly["Month"].map(weight_map)
+    df_monthly["Weighted"] = df_monthly["Units"] * df_monthly["Weight"]
+
+    weighted_summary = df_monthly.groupby("SKU")["Weighted"].sum().reset_index(name="Media Exponencial (Mes)")
+    return weighted_summary
+
+# Merge real weighted average
+weighted_df = get_weighted_units_by_sku()
+df = df.merge(weighted_df, on="SKU", how="left")
+df["Media Exponencial (Mes)"] = df["Media Exponencial (Mes)"].fillna(0).round(2)
+
 df["Media"] = ((df["Media Lineal (Mes)"] + df["Media Exponencial (Mes)"]) / 2).round(2)
 
 # --- Accurate Active Months --- 🟡 NEW
