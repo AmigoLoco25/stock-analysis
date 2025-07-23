@@ -76,6 +76,7 @@ def fetch_salesorders():
     return df[df["docNumber"].str.startswith("SO", na=False)]
 
 # --- FETCH SHIPPED ITEMS ---
+@st.cache_data(ttl=600000)  # 🟡 NEW — cache shipped item results by doc_id/doc_number
 def get_shipped_items(doc_id, doc_number):
     url = f"{BASE_URL}/documents/salesorder/{doc_id}/shippeditems"
     try:
@@ -94,53 +95,54 @@ def get_shipped_items(doc_id, doc_number):
     except:
         return []
 
-# --- MAIN PROCESSING ---
-product_df = fetch_products()
-sales_df = fetch_salesorders()
+# --- WRAPPED FULL PIPELINE IN CACHE --- 🟡 NEW
+@st.cache_data(ttl=600000)
+def process_data():
+    product_df = fetch_products()
+    sales_df = fetch_salesorders()
 
-shipped_rows = []
-for _, row in sales_df.iterrows():
-    shipped_rows += get_shipped_items(row["id"], row["docNumber"])
+    shipped_rows = []
+    for _, row in sales_df.iterrows():
+        shipped_rows += get_shipped_items(row["id"], row["docNumber"])
 
-df = pd.DataFrame(shipped_rows)
-df = df.apply(fix_sku_and_name, axis=1)
+    df = pd.DataFrame(shipped_rows)
+    df = df.apply(fix_sku_and_name, axis=1)
+    df = df[~df["SKU"].isin(["", "0", None, np.nan])]
+    df = df[~df["Product Name"].str.lower().eq("shipping")]
 
-# Remove rows with bad SKUs or bad names
-df = df[~df["SKU"].isin(["", "0", None, np.nan])]
-df = df[~df["Product Name"].str.lower().eq("shipping")]
+    df = (
+        df.groupby("SKU", as_index=False)
+        .agg({
+            "Product Name": lambda x: x.mode().iloc[0] if not x.mode().empty else x.iloc[0],
+            "Units_Ordered": "sum",
+            "Units_Shipped": "sum",
+            "Units_Pending": "sum"
+        })
+        .rename(columns={
+            "Units_Ordered": "Units (Last 6 Months)",
+            "Units_Pending": "Stock Reservado"
+        })
+    )
 
-# --- Aggregate by SKU ---
-df = (
-    df.groupby("SKU", as_index=False)
-    .agg({
-        "Product Name": lambda x: x.mode().iloc[0] if not x.mode().empty else x.iloc[0],
-        "Units_Ordered": "sum",
-        "Units_Shipped": "sum",
-        "Units_Pending": "sum"
-    })
-    .rename(columns={
-        "Units_Ordered": "Units (Last 6 Months)",
-        "Units_Pending": "Stock Reservado"
-    })
-)
+    # --- Add Stock Real ---
+    product_df["sku"] = product_df["sku"].astype(str)
+    df["SKU"] = df["SKU"].astype(str)
+    stock_map = product_df.set_index("sku")["stock"].to_dict()
+    df["Stock Real"] = df["SKU"].map(stock_map).fillna(0).astype(int)
+    df["Stock Disponible"] = df["Stock Real"] - df["Stock Reservado"]
 
-# --- Add Stock Real ---
-product_df["sku"] = product_df["sku"].astype(str)
-df["SKU"] = df["SKU"].astype(str)
-stock_map = product_df.set_index("sku")["stock"].to_dict()
-df["Stock Real"] = df["SKU"].map(stock_map).fillna(0).astype(int)
+    return df
 
-# --- Compute Stock Disponible ---
-df["Stock Disponible"] = df["Stock Real"] - df["Stock Reservado"]
+# --- CALL CACHED PIPELINE --- 🟡 NEW
+df = process_data()
 
 # --- Simulate Weighted Averages ---
-# Weights: Last 3 months higher (0.25), others (0.125)
 weights = [0.125]*4 + [0.25]*2
 df["Media Lineal (Mes)"] = (df["Units (Last 6 Months)"] / 6).round(2)
 df["Media Exponencial (Mes)"] = (df["Units (Last 6 Months)"] * sum(weights)/6).round(2)
 df["Media"] = ((df["Media Lineal (Mes)"] + df["Media Exponencial (Mes)"]) / 2).round(2)
 
-# --- Calculate Accurate Active Months ---
+# --- Accurate Active Months --- 🟡 NEW
 @st.cache_data(ttl=600000)
 def fetch_full_salesorders():
     url = f"{BASE_URL}/documents/salesorder?starttmp={start_ts}&endtmp={end_ts}"
@@ -162,16 +164,16 @@ def extract_sku_dates(order_df):
             })
     return pd.DataFrame(rows)
 
-# Build Month field
 orders_raw = fetch_full_salesorders()
 sku_date_df = extract_sku_dates(orders_raw)
 sku_date_df["Month"] = sku_date_df["Date"].apply(lambda d: d.replace(day=1))
-active_months_df = sku_date_df.groupby("SKU")["Month"].nunique().reset_index(name="Active Months")
+six_months_ago_date = (now - relativedelta(months=6)).replace(day=1)  # 🟡 NEW
+sku_date_df = sku_date_df[sku_date_df["Month"] >= six_months_ago_date]  # 🟡 NEW
 
-# Merge updated Active Months into main df
+active_months_df = sku_date_df.groupby("SKU")["Month"].nunique().reset_index(name="Active Months")
 df = df.drop(columns=["Active Months"], errors="ignore")
 df = df.merge(active_months_df, on="SKU", how="left")
-df["Active Months"] = df["Active Months"].fillna(0).clip(upper=6).astype(int)
+df["Active Months"] = df["Active Months"].fillna(0).clip(upper=6).astype(int)  # 🟡 NEW
 
 # --- FINAL TABLE ---
 df = df.sort_values(by="Units (Last 6 Months)", ascending=False)
@@ -198,8 +200,8 @@ with pd.ExcelWriter(buf, engine="openpyxl") as writer:
     filtered_df.to_excel(writer, index=False)
 buf.seek(0)
 st.download_button(
-    "📥 Descargar Excel (Stock)",
+    "📥 Descargar Excel",
     buf,
-    file_name="product_stock_analysis(6meses).xlsx",
+    file_name="analisis_stock_6meses.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
