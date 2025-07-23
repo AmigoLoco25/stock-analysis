@@ -202,11 +202,11 @@ df = df.merge(active_months_df, on="SKU", how="left")
 df["Active Months"] = df["Active Months"].fillna(0).clip(upper=6).astype(int)
 
 # --- Averages ---
-df["Media Lineal (Mes)"] = (df["Units (Last 6 Months)"] / 6).round(2)
+df["Media Lineal (Mes)"] = (df["Units (Last 6 Months)"] / 6).round(0)
 weighted_df = get_weighted_units_by_sku(filter_so_flag)
 df = df.merge(weighted_df, on="SKU", how="left")
-df["Media Exponencial (Mes)"] = df["Media Exponencial (Mes)"].fillna(0).round(2)
-df["Media"] = ((df["Media Lineal (Mes)"] + df["Media Exponencial (Mes)"]) / 2).round(2)
+df["Media Exponencial (Mes)"] = df["Media Exponencial (Mes)"].fillna(0).round(20
+df["Media"] = ((df["Media Lineal (Mes)"] + df["Media Exponencial (Mes)"]) / 2).round(0)
 
 # --- Final Table ---
 df = df.sort_values(by="Units (Last 6 Months)", ascending=False)
