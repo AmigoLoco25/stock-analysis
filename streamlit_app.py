@@ -171,7 +171,7 @@ active_months_df = sku_date_df.groupby("SKU")["Month"].nunique().reset_index(nam
 # Merge updated Active Months into main df
 df = df.drop(columns=["Active Months"], errors="ignore")
 df = df.merge(active_months_df, on="SKU", how="left")
-df["Active Months"] = df["Active Months"].fillna(0).astype(int)
+df["Active Months"] = df["Active Months"].fillna(0).clip(upper=6).astype(int)
 
 # --- FINAL TABLE ---
 df = df.sort_values(by="Units (Last 6 Months)", ascending=False)
