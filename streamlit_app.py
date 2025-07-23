@@ -167,7 +167,7 @@ def extract_sku_dates(order_df):
 orders_raw = fetch_full_salesorders()
 sku_date_df = extract_sku_dates(orders_raw)
 sku_date_df["Month"] = sku_date_df["Date"].apply(lambda d: d.replace(day=1))
-six_months_ago_date = (now - relativedelta(months=6)).replace(day=1)  # 🟡 NEW
+six_months_ago_date = (now - relativedelta(months=6)).replace(day=1).date()
 sku_date_df = sku_date_df[sku_date_df["Month"] >= six_months_ago_date]  # 🟡 NEW
 
 active_months_df = sku_date_df.groupby("SKU")["Month"].nunique().reset_index(name="Active Months")
